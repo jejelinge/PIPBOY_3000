@@ -77,6 +77,7 @@ TFT_eSPI tft = TFT_eSPI();
 Adafruit_SHT31 sht31 = Adafruit_SHT31();
 
 int i=0;
+int a=0;
 uint16_t x = 0, y = 0;
 int interupt = 1;
 float t_far = 0;
@@ -110,21 +111,31 @@ void setup() {
 
   Serial.begin(115200);
 
-  WiFi.begin(ssid, password);
-
-  while ( WiFi.status() != WL_CONNECTED ) {
-    delay ( 500 );
-    Serial.print ( "." );
-  }
-  Serial.println("\nConnected to the WiFi network");
-  Serial.print("Local ESP32 IP: ");
-  Serial.println(WiFi.localIP());
-
   tft.begin();
   tft.setRotation(1);
   tft.fillScreen(TFT_BLACK);
   tft.setTextSize(1);
   tft.setTextColor(Light_green, TFT_BLACK);
+  tft.drawString("Network connection in progress", 10, 20, 4);
+
+  WiFi.begin(ssid, password);
+
+  while ( WiFi.status() != WL_CONNECTED ) {
+    delay ( 500 );
+    Serial.print ( "." );
+    tft.drawString(".", 10 + a, 40, 4);
+    a=a+5;
+    if (a>100){
+     tft.fillScreen(TFT_BLACK);
+     tft.drawString("ERROR",180 , 20, 4);
+     tft.drawString("Check wifi SSID and PASSWORD", 10, 60, 4);
+    }
+  }
+  Serial.println("\nConnected to the WiFi network");
+  Serial.print("Local ESP32 IP: ");
+  Serial.println(WiFi.localIP());
+
+  tft.fillScreen(TFT_BLACK);
   localip = WiFi.localIP().toString();
   tft.drawString(localip, 10, 20, 4);
 
