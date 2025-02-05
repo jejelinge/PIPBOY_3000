@@ -232,6 +232,10 @@ void loop()
   Serial.print("Month: ");
   Serial.println(currentMonth);
 
+if((currentMonth*30 + monthDay) >= 121 && (currentMonth*30 + monthDay) < 331){
+timeClient.setTimeOffset(utcOffsetInSeconds*UTC);} // Change daylight saving time - Summer
+else {timeClient.setTimeOffset((utcOffsetInSeconds*UTC) - 3600);} // Change daylight saving time - Winter
+
   if (digitalRead(IN_STAT) == false) {
     flag = 1;
     myDFPlayer.playMp3Folder(random(2, 5));
