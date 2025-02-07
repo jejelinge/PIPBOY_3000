@@ -19,9 +19,9 @@
 
 //========================USEFUL VARIABLES=============================
 int UTC = 2; //Set your time zone ex: france = UTC+2
-uint16_t notification_volume = 30;  
+uint16_t notification_volume = 25;  //0 to 30
 //=====================================================================
-bool res;
+
 // Load GIF library
 #include <AnimatedGIF.h>
 AnimatedGIF gif;
@@ -57,13 +57,15 @@ AnimatedGIF gif;
 #define Dark_green 0x0261 
 #define Time_color 0x04C0
 
+
 #include "WiFiManager.h"
 #include "NTPClient.h"
 #include "DFRobotDFPlayerMini.h"
+#include "Adafruit_SHT31.h"
 #include "FS.h"
 #include <SPI.h>
 #include <TFT_eSPI.h>
-#include "Adafruit_SHT31.h"
+
 
 const byte RXD2 = 16;  // Connects to module's TX => 16
 const byte TXD2 = 17;  // Connects to module's RX => 17
@@ -74,8 +76,9 @@ void printDetail(uint8_t type, int value);
 TFT_eSPI tft = TFT_eSPI();
 Adafruit_SHT31 sht31 = Adafruit_SHT31();
 
+bool res;
 int i=0;
-int a=0;
+int a = 0;
 uint16_t x = 0, y = 0;
 int interupt = 1;
 float t_far = 0;
@@ -142,7 +145,6 @@ void setup() {
   tft.fillScreen(TFT_BLACK);
   localip = WiFi.localIP().toString();
   tft.drawString(localip, 10, 20, 4);
-  tft.drawString(manager.getConfigPortalSSID(), 10, 60, 4);
 
   timeClient.begin();
 
@@ -229,10 +231,11 @@ void loop()
   int currentMonth = ptm->tm_mon+1;
   Serial.print("Month: ");
   Serial.println(currentMonth);
-
-if((currentMonth*30 + monthDay) >= 121 && (currentMonth*30 + monthDay) < 331){
+  
+  if((currentMonth*30 + monthDay) >= 121 && (currentMonth*30 + monthDay) < 331){
 timeClient.setTimeOffset(utcOffsetInSeconds*UTC);} // Change daylight saving time - Summer
 else {timeClient.setTimeOffset((utcOffsetInSeconds*UTC) - 3600);} // Change daylight saving time - Winter
+
 
   if (digitalRead(IN_STAT) == false) {
     flag = 1;
@@ -271,8 +274,8 @@ else {timeClient.setTimeOffset((utcOffsetInSeconds*UTC) - 3600);} // Change dayl
     tft.fillScreen(TFT_BLACK);
     tft.drawBitmap(35, 300, Bottom_layer_2Bottom_layer_2, 380, 22, Dark_green);
     tft.drawBitmap(35, 300, myBitmapDate, 380, 22, Light_green);
-    tft.drawBitmap(35, 80, temperatureTemp_humTemp_hum_2, 408, 29, Light_green);
-    //tft.drawBitmap(35, 80, temperatureTemp_hum_F , 408, 29, Light_green);
+    //tft.drawBitmap(35, 80, temperatureTemp_humTemp_hum_2, 408, 29, Light_green);
+    tft.drawBitmap(35, 80, temperatureTemp_hum_F , 408, 29, Light_green);
     tft.drawBitmap(200, 200, RadiationRadiation, 62, 61, Light_green);
 
     while (digitalRead(IN_DATA) == false) {
@@ -291,7 +294,7 @@ else {timeClient.setTimeOffset((utcOffsetInSeconds*UTC) - 3600);} // Change dayl
       //show_hour();
       tft.setTextColor(Time_color, TFT_BLACK);
       t_far = (t*1.8)+32;
-      tft.drawFloat(t, 2, 60, 135, 7);
+      tft.drawFloat(t_far, 2, 60, 135, 7);
       tft.drawFloat(h, 2, 258, 135, 7);
     }
   }
@@ -317,10 +320,9 @@ else {timeClient.setTimeOffset((utcOffsetInSeconds*UTC) - 3600);} // Change dayl
 
   if(digitalRead(IN_RADIO) == false ) {
     flag = 1;
-   // myDFPlayer.playMp3Folder(random(2, 5));
-   // delay(2000);
-    myDFPlayer.playMp3Folder(random(5, 10));
+    myDFPlayer.playMp3Folder(random(2, 5));
     delay(500);
+    myDFPlayer.playMp3Folder(random(5, 10));
     tft.fillScreen(TFT_BLACK);
     tft.drawBitmap(35, 300, Bottom_layer_2Bottom_layer_2 , 380, 22, Dark_green);
     tft.drawBitmap(35, 300, myBitmapDate, 380, 22, Light_green);
