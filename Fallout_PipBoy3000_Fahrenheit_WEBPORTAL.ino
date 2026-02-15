@@ -1,32 +1,22 @@
 // TFT_eSPI_memory
 //
-// Example sketch which shows how to display an
-// animated GIF image stored in FLASH memory
-
-// Adapted by Bodmer for the TFT_eSPI Arduino library:
-// https://github.com/Bodmer/TFT_eSPI
+// Animated GIF on TFT with Fallout PipBoy interface - FAHRENHEIT VERSION
+// Fallout-themed WiFiManager captive portal + TFT debug boot sequence
 //
-// To display a GIF from memory, a single callback function
-// must be provided - GIFDRAW
-// This function is called after each scan line is decoded
-// and is passed the 8-bit pixels, RGB565 palette and info
-// about how and where to display the line. The palette entries
-// can be in little-endian or big-endian order; this is specified
-// in the begin() method.
-//
-// The AnimatedGIF class doesn't allocate or free any memory, but the
-// instance data occupies about 22.5K of RAM.
+// Adapted by Bodmer for the TFT_eSPI Arduino library
+// Enhanced by Jéjé l'Ingé - jeje-linge.fr
 
 //========================USEFUL VARIABLES=============================
-int UTC = 2; //Set your time zone ex: france = UTC+2
-uint16_t notification_volume = 25;  //0 to 30
+int UTC = 2;                    // Set your time zone ex: france = UTC+2
+uint16_t notification_volume = 30;
 //=====================================================================
+bool res;
 
 // Load GIF library
 #include <AnimatedGIF.h>
 AnimatedGIF gif;
 
-#include ".\images/INIT.h"
+#include ".\images/INIT_2.h"
 #include ".\images/STAT.h"
 #include ".\images/RADIO.h"
 #include ".\images/DATA_1.h"
@@ -40,7 +30,7 @@ AnimatedGIF gif;
 #include ".\images/Afternoon.h"
 #include ".\images/temperatureTemp_hum_F.h"
 
-#define INIT INIT
+#define INIT_2 INIT
 #define TIME TIME
 #define STAT STAT
 #define DATA_1 DATA_1
@@ -53,22 +43,22 @@ AnimatedGIF gif;
 #define IN_RADIO 33
 
 #define REPEAT_CAL false
-#define Light_green 0x35C2
-#define Dark_green 0x0261 
-#define Time_color 0x04C0
-
+#define Light_green  0x35C2
+#define Dark_green   0x0261
+#define Time_color   0x04C0
+#define Amber_warn   0xFDA0  // Orange/amber for warnings
+#define Red_error    0xF800  // Red for errors
 
 #include "WiFiManager.h"
 #include "NTPClient.h"
 #include "DFRobotDFPlayerMini.h"
-#include "Adafruit_SHT31.h"
 #include "FS.h"
 #include <SPI.h>
 #include <TFT_eSPI.h>
+#include "Adafruit_SHT31.h"
 
-
-const byte RXD2 = 16;  // Connects to module's TX => 16
-const byte TXD2 = 17;  // Connects to module's RX => 17
+const byte RXD2 = 16;
+const byte TXD2 = 17;
 
 DFRobotDFPlayerMini myDFPlayer;
 void printDetail(uint8_t type, int value);
@@ -76,31 +66,321 @@ void printDetail(uint8_t type, int value);
 TFT_eSPI tft = TFT_eSPI();
 Adafruit_SHT31 sht31 = Adafruit_SHT31();
 
-bool res;
-int i=0;
+int i = 0;
 int a = 0;
 uint16_t x = 0, y = 0;
 int interupt = 1;
 float t_far = 0;
-int hh=0;
-int mm=0;
-int ss=0;
+int hh = 0;
+int mm = 0;
+int ss = 0;
 int flag = 0;
 int prev_hour = 0;
-String localip ;
+String localip;
 bool enableHeater = false;
 uint8_t loopCnt = 0;
-const long utcOffsetInSeconds = 3600; // Offset in second
-uint32_t targetTime = 0;                    // for next 1 second timeout
-static uint8_t conv2d(const char* p); // Forward declaration needed for IDE 1.6.x
+const long utcOffsetInSeconds = 3600;
+uint32_t targetTime = 0;
+static uint8_t conv2d(const char* p);
+
+// Track subsystem status for debug
+bool dfPlayerOK = false;
+bool sensorOK = false;
+bool wifiOK = false;
+bool ntpOK = false;
 
 // Define NTP Client to get time
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, "pool.ntp.org", utcOffsetInSeconds*UTC);
+NTPClient timeClient(ntpUDP, "pool.ntp.org", utcOffsetInSeconds * UTC);
 
 byte omm = 99, oss = 99;
 byte xcolon = 0, xsecs = 0;
 unsigned int colour = 0;
+
+// ============================================================
+//  FALLOUT-THEMED BOOT TERMINAL ON TFT
+// ============================================================
+
+int bootLine = 0;           // Current Y position for boot messages
+const int BOOT_LINE_H = 22; // Line height in pixels
+const int BOOT_X = 8;       // Left margin
+const int BOOT_START_Y = 5; // Top margin
+
+void bootClear() {
+  tft.fillScreen(TFT_BLACK);
+  bootLine = BOOT_START_Y;
+}
+
+// Print a boot line with status indicator
+// status: 0 = info (green), 1 = OK (green), 2 = WARN (amber), 3 = ERROR (red), 4 = header
+void bootPrint(const char* msg, uint8_t status = 0) {
+  if (bootLine > 290) {  // Screen full, scroll up visually
+    bootClear();
+  }
+
+  uint16_t color;
+  const char* prefix;
+  switch (status) {
+    case 1:  color = Light_green; prefix = "[  OK  ] "; break;
+    case 2:  color = Amber_warn;  prefix = "[ WARN ] "; break;
+    case 3:  color = Red_error;   prefix = "[ FAIL ] "; break;
+    case 4:  // Header / title
+      tft.setTextColor(Light_green, TFT_BLACK);
+      tft.drawString(msg, BOOT_X, bootLine, 2);
+      bootLine += BOOT_LINE_H + 4;
+      return;
+    default: color = Dark_green;  prefix = "  > "; break;
+  }
+
+  tft.setTextColor(color, TFT_BLACK);
+  String line = String(prefix) + String(msg);
+  tft.drawString(line, BOOT_X, bootLine, 2);
+  bootLine += BOOT_LINE_H;
+
+  // Also print to Serial
+  Serial.println(line);
+}
+
+// Draws the decorative header
+void bootHeader() {
+  bootClear();
+  tft.setTextColor(Light_green, TFT_BLACK);
+
+  // PipBoy terminal header
+  tft.drawString("ROBCO INDUSTRIES (TM) TERMLINK", BOOT_X, BOOT_START_Y, 2);
+  bootLine = BOOT_START_Y + BOOT_LINE_H;
+  tft.drawString("PIPBOY 3000 MARK IV OS v4.1.7", BOOT_X, bootLine, 2);
+  bootLine += BOOT_LINE_H;
+
+  // Decorative separator
+  tft.drawString("================================", BOOT_X, bootLine, 2);
+  bootLine += BOOT_LINE_H + 4;
+}
+
+// Show a blinking cursor effect (brief)
+void bootCursor(int count = 3) {
+  for (int i = 0; i < count; i++) {
+    tft.fillRect(BOOT_X, bootLine, 10, 14, Light_green);
+    delay(150);
+    tft.fillRect(BOOT_X, bootLine, 10, 14, TFT_BLACK);
+    delay(100);
+  }
+}
+
+// Show final status summary before launching main app
+void bootSummary() {
+  bootLine += 6;
+  tft.drawLine(BOOT_X, bootLine, 470, bootLine, Dark_green);
+  bootLine += 8;
+
+  tft.setTextColor(Light_green, TFT_BLACK);
+  String summary = "SYS: WiFi[";
+  summary += wifiOK   ? "OK" : "!!";
+  summary += "] NTP[";
+  summary += ntpOK    ? "OK" : "!!";
+  summary += "] AUD[";
+  summary += dfPlayerOK ? "OK" : "!!";
+  summary += "] SENS[";
+  summary += sensorOK ? "OK" : "!!";
+  summary += "]";
+  tft.drawString(summary, BOOT_X, bootLine, 2);
+  bootLine += BOOT_LINE_H;
+
+  if (wifiOK && dfPlayerOK && sensorOK) {
+    bootPrint("ALL SYSTEMS NOMINAL", 1);
+  } else {
+    bootPrint("BOOT WITH WARNINGS - CHECK LOG", 2);
+  }
+  delay(1500);
+}
+
+// ============================================================
+//  FALLOUT CSS FOR WIFIMANAGER CAPTIVE PORTAL
+// ============================================================
+
+const char PIPBOY_CSS[] PROGMEM = R"rawliteral(
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+
+  :root {
+    --pip-green: #30ff50;
+    --pip-dark: #0a3c12;
+    --pip-bg: #0b1a0e;
+    --pip-border: #1a5c2a;
+    --pip-glow: rgba(48, 255, 80, 0.15);
+    --pip-dim: #186828;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background-color: var(--pip-bg) !important;
+    color: var(--pip-green) !important;
+    font-family: 'Share Tech Mono', 'Courier New', monospace !important;
+    margin: 0; padding: 20px;
+    min-height: 100vh;
+    background-image:
+      repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0,0,0,0.15) 2px,
+        rgba(0,0,0,0.15) 4px
+      );
+    animation: flicker 0.15s infinite alternate;
+  }
+
+  @keyframes flicker {
+    0%   { opacity: 0.97; }
+    100% { opacity: 1; }
+  }
+
+  /* Scanline overlay */
+  body::after {
+    content: '';
+    position: fixed; top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      0deg,
+      rgba(0,0,0,0) 0px,
+      rgba(0,0,0,0) 1px,
+      rgba(0,0,0,0.1) 1px,
+      rgba(0,0,0,0.1) 2px
+    );
+    z-index: 9999;
+  }
+
+  .wrap {
+    max-width: 480px !important;
+    margin: 0 auto;
+    padding: 20px;
+    border: 1px solid var(--pip-border);
+    background: rgba(10, 60, 18, 0.3);
+    box-shadow: 0 0 30px var(--pip-glow), inset 0 0 30px rgba(0,0,0,0.5);
+  }
+
+  /* Header area */
+  div[style*='text-align:left'], .msg {
+    border-bottom: 1px solid var(--pip-dim);
+    padding-bottom: 12px;
+    margin-bottom: 16px;
+  }
+
+  h1, h2, h3 {
+    color: var(--pip-green) !important;
+    text-shadow: 0 0 10px var(--pip-green), 0 0 20px rgba(48,255,80,0.3);
+    font-weight: normal !important;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+
+  /* Input fields */
+  input[type="text"],
+  input[type="password"],
+  select {
+    background: var(--pip-dark) !important;
+    color: var(--pip-green) !important;
+    border: 1px solid var(--pip-dim) !important;
+    font-family: 'Share Tech Mono', monospace !important;
+    font-size: 16px !important;
+    padding: 10px 12px !important;
+    width: 100% !important;
+    outline: none !important;
+    border-radius: 0 !important;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+
+  input:focus, select:focus {
+    border-color: var(--pip-green) !important;
+    box-shadow: 0 0 8px var(--pip-glow) !important;
+  }
+
+  input::placeholder {
+    color: var(--pip-dim) !important;
+    opacity: 1;
+  }
+
+  /* Buttons */
+  button, input[type="submit"], .D {
+    background: transparent !important;
+    color: var(--pip-green) !important;
+    border: 1px solid var(--pip-green) !important;
+    font-family: 'Share Tech Mono', monospace !important;
+    font-size: 15px !important;
+    padding: 12px 20px !important;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    width: 100% !important;
+    margin: 6px 0 !important;
+    transition: all 0.15s;
+    border-radius: 0 !important;
+    text-decoration: none !important;
+    display: block !important;
+    text-align: center !important;
+  }
+
+  button:hover, input[type="submit"]:hover, .D:hover {
+    background: var(--pip-green) !important;
+    color: var(--pip-bg) !important;
+    box-shadow: 0 0 15px var(--pip-glow);
+    text-shadow: none;
+  }
+
+  button:active, input[type="submit"]:active {
+    transform: scale(0.98);
+  }
+
+  /* Links */
+  a {
+    color: var(--pip-green) !important;
+    text-decoration: none !important;
+  }
+  a:hover { text-decoration: underline !important; }
+
+  /* Labels */
+  label { color: var(--pip-dim) !important; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; }
+
+  /* Quality bars */
+  .q {
+    color: var(--pip-dim) !important;
+  }
+
+  /* Footer / info text */
+  .c, .msg, small {
+    color: var(--pip-dim) !important;
+    font-size: 12px;
+  }
+
+  /* Custom branding header */
+  #pipboy-brand {
+    text-align: center;
+    padding: 15px 0 10px 0;
+    border-bottom: 2px solid var(--pip-dim);
+    margin-bottom: 16px;
+  }
+  #pipboy-brand h2 {
+    margin: 0 0 4px 0;
+    font-size: 20px;
+  }
+  #pipboy-brand .sub {
+    color: var(--pip-dim);
+    font-size: 11px;
+    letter-spacing: 3px;
+  }
+</style>
+
+<div id="pipboy-brand">
+  <h2>// PIPBOY 3000 //</h2>
+  <div class="sub">ROBCO INDUSTRIES UNIFIED OS</div>
+  <div class="sub">NETWORK CONFIGURATION MODULE</div>
+</div>
+)rawliteral";
+
+// ============================================================
+//  SETUP
+// ============================================================
 
 void setup() {
 
@@ -114,303 +394,444 @@ void setup() {
 
   tft.begin();
   tft.setRotation(1);
-  tft.fillScreen(TFT_BLACK);
-  tft.setTextColor(Light_green, TFT_BLACK);
-  tft.drawString("1. Open the web portal", 10, 20, 4);
-  tft.drawString("2. Enter SSID and password", 10, 60, 4);
+
+  // ---- BOOT SEQUENCE ----
+  bootHeader();
+  delay(400);
+
+  bootPrint("Initializing subsystems...");
+  bootCursor(2);
+  delay(200);
+
+  // ---- WiFi Setup ----
+  bootPrint("Loading WiFi module...");
 
   WiFiManager manager;
-  //manager.resetSettings();
-   manager.setTimeout(120);
-  //fetches ssid and password and tries to connect, if connections succeeds it starts an access point with the name called "PIPBOY3000" and waits in a blocking loop for configuration
-  res = manager.autoConnect("PIPBOY3000","password");
- 
+  manager.setTimeout(120);
 
-  if(!res) {
-  Serial.println("failed to connect and timeout occurred");
-  tft.fillScreen(TFT_BLACK);
-  tft.drawString("TIMEOUT",10 , 20, 4);
-  tft.drawString("Check wifi SSID and PASSWORD", 10, 60, 4);
-  delay(6000);
-  tft.fillScreen(TFT_BLACK);
-  tft.drawString("ESP Restart",10 , 20, 4);
-  delay(4000);
-  ESP.restart(); //reset and try again
+  // Inject Fallout CSS into captive portal
+  manager.setCustomHeadElement(PIPBOY_CSS);
+  manager.setTitle("PIPBOY 3000");
+  manager.setClass("invert");   // dark theme base
+
+  // Show step-by-step portal instructions on TFT
+  bootPrint("Searching for saved network...");
+  bootCursor(2);
+  bootLine += 4;
+  bootPrint("WIFI SETUP INSTRUCTIONS:", 4);
+  bootPrint("1. Open WiFi on your phone", 0);
+  bootPrint("2. Connect to: PIPBOY3000", 0);
+  bootPrint("3. Password:   password", 0);
+  bootPrint("4. Open 192.168.4.1 in browser", 0);
+  bootPrint("5. Select your WiFi network", 0);
+  bootLine += 4;
+  bootPrint("Waiting for connection...", 2);
+
+  res = manager.autoConnect("PIPBOY3000", "password");
+
+  if (!res) {
+    wifiOK = false;
+    bootPrint("WiFi connection FAILED", 3);
+    bootPrint("Timeout after 120s", 3);
+    bootLine += 6;
+    bootPrint("Check SSID and PASSWORD", 2);
+    bootPrint("Rebooting in 6 seconds...", 2);
+    delay(6000);
+    bootPrint(">>> ESP.restart()", 0);
+    delay(1000);
+    ESP.restart();
   }
 
-  Serial.println("\nConnected to the WiFi network");
-  Serial.print("Local ESP32 IP: ");
-  Serial.println(WiFi.localIP());
-
-  tft.fillScreen(TFT_BLACK);
+  wifiOK = true;
   localip = WiFi.localIP().toString();
-  tft.drawString(localip, 10, 20, 4);
+  bootPrint("WiFi connected", 1);
 
+  String ipMsg = "IP: " + localip;
+  bootPrint(ipMsg.c_str(), 0);
+  delay(300);
+
+  // ---- NTP Time Client ----
+  bootPrint("Starting NTP client...");
   timeClient.begin();
+  timeClient.update();
 
+  if (timeClient.getEpochTime() > 1000000) {
+    ntpOK = true;
+    bootPrint("NTP time synced", 1);
+  } else {
+    ntpOK = false;
+    bootPrint("NTP sync failed - retrying...", 2);
+    delay(2000);
+    timeClient.update();
+    if (timeClient.getEpochTime() > 1000000) {
+      ntpOK = true;
+      bootPrint("NTP time synced (retry)", 1);
+    } else {
+      bootPrint("NTP unavailable - time may drift", 2);
+    }
+  }
+  delay(200);
+
+  // ---- DFPlayer Mini ----
+  bootPrint("Init DFPlayer serial...");
   FPSerial.begin(9600, SERIAL_8N1, RXD2, TXD2);
   delay(1000);
-  Serial.println();
-  Serial.println(F("DFRobot DFPlayer Mini Demo"));
-  Serial.println(F("Initializing DFPlayer ... (May take 3~5 seconds)"));
-  tft.drawString("Initializing DFPlayer...", 10, 20, 4);
-  tft.fillScreen(TFT_BLACK);
 
-  if (!myDFPlayer.begin(FPSerial, /*isACK = */ true, /*doReset = */ true)) {  //Use serial to communicate with mp3.
-    Serial.println(F("Unable to begin DFplayer"));
-    tft.drawString("Unable to begin DFplayer", 10, 20, 4);
-    Serial.println(F("1.Recheck the connection!"));
-    tft.drawString("1. Recheck the connection", 10, 50, 4);
-    Serial.println(F("2.Insert the SD card!"));
-    tft.drawString("2. Insert the SD card", 10, 80, 4);
-    tft.drawString("3. Format SD card in FAT32", 10, 110, 4);
+  bootPrint("Connecting DFPlayer Mini...");
+  if (!myDFPlayer.begin(FPSerial, true, true)) {
+    dfPlayerOK = false;
+    bootPrint("DFPlayer OFFLINE", 3);
+    bootPrint("1. Check wiring RX/TX", 2);
+    bootPrint("2. Insert SD card (FAT32)", 2);
+    bootPrint("Audio disabled - continuing...", 2);
+    delay(2000);
+    // NOTE: Graceful degradation instead of blocking forever
+  } else {
+    dfPlayerOK = true;
+    myDFPlayer.volume(notification_volume);
+    myDFPlayer.setTimeOut(500);
+    bootPrint("DFPlayer online", 1);
 
-    while (true) {
-      delay(0);
+    String volMsg = "Volume: " + String(notification_volume) + "/30";
+    bootPrint(volMsg.c_str(), 0);
+  }
+  delay(200);
+
+  // ---- SHT31 Temperature Sensor ----
+  bootPrint("Scanning I2C for SHT31...");
+  if (!sht31.begin(0x44)) {
+    sensorOK = false;
+    bootPrint("SHT31 NOT FOUND (0x44)", 3);
+    bootPrint("Check I2C wiring SDA/SCL", 2);
+    bootPrint("Temp/humidity disabled", 2);
+    delay(2000);
+    // Graceful degradation instead of blocking
+  } else {
+    sensorOK = true;
+    bootPrint("SHT31 sensor online", 1);
+
+    if (sht31.isHeaterEnabled()) {
+      bootPrint("Heater: ENABLED", 0);
+    } else {
+      bootPrint("Heater: DISABLED", 0);
     }
   }
+  delay(200);
 
-Serial.println(F("DFPlayer Mini online."));
-tft.drawString("DFPlayer Mini online", 10, 20, 4);
-myDFPlayer.volume(notification_volume);
-myDFPlayer.setTimeOut(500);
+  // ---- Boot Summary ----
+  bootSummary();
 
-  while (!Serial)
-    delay(10);    // will pause Zero, Leonardo, etc until serial console opens
+  // ---- GIF Engine ----
+  gif.begin(BIG_ENDIAN_PIXELS);
 
-  Serial.println("SHT31 test");
-  if (! sht31.begin(0x44)) {   // Set to 0x45 for alternate i2c addr
-     tft.fillScreen(TFT_BLACK);
-    Serial.println("Couldn't find SHT31");
-    tft.drawString("Couldn't find SHT31 (temp sensor)", 10, 20, 4);
-    tft.drawString("Recheck the connection", 10, 50, 4);
-    while (1) delay(1);
+  // ---- Play startup sound & animation ----
+  if (dfPlayerOK) {
+    myDFPlayer.playMp3Folder(1);
   }
 
-  Serial.print("Heater Enabled State: ");
-  if (sht31.isHeaterEnabled())
-    Serial.println("ENABLED");
-  else
-    Serial.println("DISABLED");
+  delay(500);
 
-  gif.begin(BIG_ENDIAN_PIXELS);
-  
-  delay(1000);
-  myDFPlayer.playMp3Folder(1);  //Play the first mp3
-
-  if (gif.open((uint8_t *)INIT, sizeof(INIT), GIFDraw))
-  {
-    tft.startWrite(); // The TFT chip select is locked low
-    while (gif.playFrame(true, NULL))
-    {
+  if (gif.open((uint8_t *)INIT, sizeof(INIT), GIFDraw)) {
+    tft.startWrite();
+    while (gif.playFrame(true, NULL)) {
       yield();
     }
-
     gif.close();
-    tft.endWrite(); // Release TFT chip select for other SPI devices
+    tft.endWrite();
   }
-
 }
 
-void loop()
-{
+// ============================================================
+//  TFT ERROR OVERLAY - Show errors during runtime
+// ============================================================
+
+// Display a temporary error/warning toast at bottom of screen
+void tftToast(const char* msg, uint8_t level = 2) {
+  uint16_t color = (level == 3) ? Red_error : Amber_warn;
+  uint16_t bgColor = TFT_BLACK;
+
+  // Draw toast bar at bottom
+  tft.fillRect(0, 290, 480, 30, bgColor);
+  tft.drawRect(0, 290, 480, 30, color);
+  tft.setTextColor(color, bgColor);
+  tft.drawString(msg, 8, 296, 2);
+}
+
+// Clear the toast area
+void tftToastClear() {
+  tft.fillRect(0, 290, 480, 30, TFT_BLACK);
+}
+
+// Full-screen error with Fallout terminal style
+void tftErrorScreen(const char* title, const char* line1, const char* line2 = nullptr, const char* line3 = nullptr) {
+  tft.fillScreen(TFT_BLACK);
+
+  // Red border
+  tft.drawRect(2, 2, 476, 316, Red_error);
+  tft.drawRect(3, 3, 474, 314, Red_error);
+
+  // Header
+  tft.setTextColor(Red_error, TFT_BLACK);
+  tft.drawString("!!! SYSTEM ERROR !!!", 120, 15, 2);
+
+  // Separator
+  tft.drawLine(10, 40, 470, 40, Red_error);
+
+  // Error title
+  tft.setTextColor(Amber_warn, TFT_BLACK);
+  tft.drawString(title, 20, 55, 4);
+
+  // Details
+  tft.setTextColor(Light_green, TFT_BLACK);
+  int y = 100;
+  if (line1) { tft.drawString(line1, 20, y, 2); y += 25; }
+  if (line2) { tft.drawString(line2, 20, y, 2); y += 25; }
+  if (line3) { tft.drawString(line3, 20, y, 2); y += 25; }
+
+  // Footer
+  tft.setTextColor(Dark_green, TFT_BLACK);
+  tft.drawString("ROBCO INDUSTRIES TERMLINK", 130, 280, 2);
+}
+
+// ============================================================
+//  PLAY SOUND (safe - checks dfPlayerOK)
+// ============================================================
+
+void playSound(int folder_min, int folder_max) {
+  if (dfPlayerOK) {
+    myDFPlayer.playMp3Folder(random(folder_min, folder_max));
+  }
+}
+
+// ============================================================
+//  MAIN LOOP
+// ============================================================
+
+void loop() {
 
   timeClient.update();
+
+  // Debug: print time to Serial
   Serial.print("Time: ");
   Serial.println(timeClient.getFormattedTime());
+
   unsigned long epochTime = timeClient.getEpochTime();
-  struct tm *ptm = gmtime ((time_t *)&epochTime); 
-  int currentYear = ptm->tm_year+1900;
-  Serial.print("Year: ");
-  Serial.println(currentYear);
-  
+  struct tm *ptm = gmtime((time_t *)&epochTime);
+  int currentYear = ptm->tm_year + 1900;
   int monthDay = ptm->tm_mday;
-  Serial.print("Month day: ");
-  Serial.println(monthDay);
+  int currentMonth = ptm->tm_mon + 1;
 
-  int currentMonth = ptm->tm_mon+1;
-  Serial.print("Month: ");
-  Serial.println(currentMonth);
-  
-  if((currentMonth*30 + monthDay) >= 121 && (currentMonth*30 + monthDay) < 331){
-timeClient.setTimeOffset(utcOffsetInSeconds*UTC);} // Change daylight saving time - Summer
-else {timeClient.setTimeOffset((utcOffsetInSeconds*UTC) - 3600);} // Change daylight saving time - Winter
+  // Daylight saving time adjustment
+  if ((currentMonth * 30 + monthDay) >= 121 && (currentMonth * 30 + monthDay) < 331) {
+    timeClient.setTimeOffset(utcOffsetInSeconds * UTC);       // Summer
+  } else {
+    timeClient.setTimeOffset((utcOffsetInSeconds * UTC) - 3600); // Winter
+  }
 
-
+  // ---- STAT Button ----
   if (digitalRead(IN_STAT) == false) {
     flag = 1;
-    myDFPlayer.playMp3Folder(random(2, 5));
+    playSound(2, 5);
     while (digitalRead(IN_STAT) == false) {
       if (gif.open((uint8_t *)STAT, sizeof(STAT), GIFDraw)) {
-        //Serial.printf("Successfully opened GIF; Canvas size = %d x %d\n", gif.getCanvasWidth(), gif.getCanvasHeight());
-        tft.startWrite();  // The TFT chip select is locked low
-        while (gif.playFrame(true, NULL)) {
-          yield();
-        }
+        tft.startWrite();
+        while (gif.playFrame(true, NULL)) { yield(); }
         gif.close();
-        tft.endWrite();  // Release TFT chip select for other SPI devices
+        tft.endWrite();
       }
     }
   }
 
+  // ---- INV Button ----
   if (digitalRead(IN_INV) == false) {
     flag = 1;
-    myDFPlayer.playMp3Folder(random(2, 5));
+    playSound(2, 5);
     while (digitalRead(IN_INV) == false) {
       if (gif.open((uint8_t *)INV, sizeof(INV), GIFDraw)) {
-        tft.startWrite();  // The TFT chip select is locked low
-        while (gif.playFrame(true, NULL)) {
-          yield();
-        }
+        tft.startWrite();
+        while (gif.playFrame(true, NULL)) { yield(); }
         gif.close();
-        tft.endWrite();  // Release TFT chip select for other SPI devices
+        tft.endWrite();
       }
     }
   }
 
+  // ---- DATA Button (Temperature/Humidity) ----
   if (digitalRead(IN_DATA) == false) {
     flag = 1;
-    myDFPlayer.playMp3Folder(random(2, 5));
+    playSound(2, 5);
     tft.fillScreen(TFT_BLACK);
     tft.drawBitmap(35, 300, Bottom_layer_2Bottom_layer_2, 380, 22, Dark_green);
     tft.drawBitmap(35, 300, myBitmapDate, 380, 22, Light_green);
-    //tft.drawBitmap(35, 80, temperatureTemp_humTemp_hum_2, 408, 29, Light_green);
-    tft.drawBitmap(35, 80, temperatureTemp_hum_F , 408, 29, Light_green);
+    tft.drawBitmap(35, 80, temperatureTemp_hum_F, 408, 29, Light_green);
     tft.drawBitmap(200, 200, RadiationRadiation, 62, 61, Light_green);
 
     while (digitalRead(IN_DATA) == false) {
 
-      float t = sht31.readTemperature();
-      float h = sht31.readHumidity();
-      if (gif.open((uint8_t *)DATA_1, sizeof(DATA_1), GIFDraw)) {
-        // Serial.printf("Successfully opened GIF; Canvas size = %d x %d\n", gif.getCanvasWidth(), gif.getCanvasHeight());
-        tft.startWrite();  // The TFT chip select is locked low
-        while (gif.playFrame(true, NULL)) {
-          yield();
+      if (!sensorOK) {
+        // Show error toast if sensor is offline
+        tftToast("SENSOR OFFLINE - NO DATA", 3);
+      } else {
+        float t = sht31.readTemperature();
+        float h = sht31.readHumidity();
+
+        if (isnan(t) || isnan(h)) {
+          tftToast("SENSOR READ ERROR", 3);
+        } else {
+          tftToastClear(); // Clear any previous error
+          tft.setTextColor(Time_color, TFT_BLACK);
+          t_far = (t * 1.8) + 32;
+          tft.drawFloat(t_far, 2, 60, 135, 7);
+          tft.drawFloat(h, 2, 258, 135, 7);
         }
-        gif.close();
-        tft.endWrite();  // Release TFT chip select for other SPI devices
       }
-      //show_hour();
-      tft.setTextColor(Time_color, TFT_BLACK);
-      t_far = (t*1.8)+32;
-      tft.drawFloat(t_far, 2, 60, 135, 7);
-      tft.drawFloat(h, 2, 258, 135, 7);
+
+      if (gif.open((uint8_t *)DATA_1, sizeof(DATA_1), GIFDraw)) {
+        tft.startWrite();
+        while (gif.playFrame(true, NULL)) { yield(); }
+        gif.close();
+        tft.endWrite();
+      }
     }
   }
 
+  // ---- TIME Button ----
   if (digitalRead(IN_TIME) == false) {
-    myDFPlayer.playMp3Folder(random(2, 5));
+    playSound(2, 5);
     tft.fillScreen(TFT_BLACK);
     tft.drawBitmap(35, 300, Bottom_layer_2Bottom_layer_2, 380, 22, Dark_green);
     tft.drawBitmap(35, 300, myBitmapDate, 380, 22, Light_green);
+
+    if (!ntpOK) {
+      tftToast("NTP OFFLINE - TIME MAY BE WRONG", 2);
+    }
+
     while (digitalRead(IN_TIME) == false) {
       if (gif.open((uint8_t *)TIME, sizeof(TIME), GIFDraw)) {
-        // Serial.printf("Successfully opened GIF; Canvas size = %d x %d\n", gif.getCanvasWidth(), gif.getCanvasHeight());
-        tft.startWrite();  // The TFT chip select is locked low
-        while (gif.playFrame(true, NULL)) {
-          yield();
-        }
+        tft.startWrite();
+        while (gif.playFrame(true, NULL)) { yield(); }
         gif.close();
-        tft.endWrite();  // Release TFT chip select for other SPI devices
+        tft.endWrite();
       }
       show_hour();
     }
   }
 
-  if(digitalRead(IN_RADIO) == false ) {
+  // ---- RADIO Button ----
+  if (digitalRead(IN_RADIO) == false) {
     flag = 1;
-    myDFPlayer.playMp3Folder(random(2, 5));
+
+    if (dfPlayerOK) {
+      myDFPlayer.playMp3Folder(random(5, 10));
+    } else {
+      // Show error if audio is offline
+      tft.fillScreen(TFT_BLACK);
+      tftErrorScreen(
+        "AUDIO MODULE",
+        "DFPlayer Mini is not responding.",
+        "Check SD card and wiring.",
+        "Radio function unavailable."
+      );
+      delay(3000);
+    }
+
     delay(500);
-    myDFPlayer.playMp3Folder(random(5, 10));
     tft.fillScreen(TFT_BLACK);
-    tft.drawBitmap(35, 300, Bottom_layer_2Bottom_layer_2 , 380, 22, Dark_green);
+    tft.drawBitmap(35, 300, Bottom_layer_2Bottom_layer_2, 380, 22, Dark_green);
     tft.drawBitmap(35, 300, myBitmapDate, 380, 22, Light_green);
-  
-  while(digitalRead(IN_RADIO) == false) {
-    if (gif.open((uint8_t *)RADIO, sizeof(RADIO), GIFDraw))
-    {
-      //Serial.printf("Successfully opened GIF; Canvas size = %d x %d\n", gif.getCanvasWidth(), gif.getCanvasHeight());
-      tft.startWrite(); // The TFT chip select is locked low
-      while (gif.playFrame(true, NULL))
-      {
-        yield();
+
+    if (!dfPlayerOK) {
+      tftToast("AUDIO OFFLINE - NO SOUND", 3);
+    }
+
+    while (digitalRead(IN_RADIO) == false) {
+      if (gif.open((uint8_t *)RADIO, sizeof(RADIO), GIFDraw)) {
+        tft.startWrite();
+        while (gif.playFrame(true, NULL)) { yield(); }
+        gif.close();
+        tft.endWrite();
       }
-      gif.close();
-      tft.endWrite(); // Release TFT chip select for other SPI devices
     }
   }
+
+  // ---- Periodic WiFi check (every loop) ----
+  if (WiFi.status() != WL_CONNECTED && wifiOK) {
+    wifiOK = false;
+    Serial.println("[WARN] WiFi connection lost!");
   }
-     
+  if (WiFi.status() == WL_CONNECTED && !wifiOK) {
+    wifiOK = true;
+    Serial.println("[OK] WiFi reconnected.");
+  }
 }
 
-void show_hour(){
+// ============================================================
+//  SHOW HOUR
+// ============================================================
+
+void show_hour() {
   tft.setTextSize(2);
   mm = timeClient.getMinutes();
   ss = timeClient.getSeconds();
 
   if (timeClient.getHours() == 0) {
     hh = 12;
-  }
-
-  else if (timeClient.getHours() == 12) {
+  } else if (timeClient.getHours() == 12) {
     hh = timeClient.getHours();
-  }
-
-  else if (timeClient.getHours() >= 13) {
+  } else if (timeClient.getHours() >= 13) {
     hh = timeClient.getHours() - 12;
-  }
-
-  else {
+  } else {
     hh = timeClient.getHours();
   }
 
-   //tft.fillRect(140, 210, 200, 50, TFT_BLACK);
-   if(timeClient.getHours() != prev_hour){tft.fillRect(140, 210, 200, 50, TFT_BLACK);}
+  if (timeClient.getHours() != prev_hour) {
+    tft.fillRect(140, 210, 200, 50, TFT_BLACK);
+  }
 
-   if(timeClient.getHours() <12 && timeClient.getHours() >0) {tft.drawBitmap(150, 220, MorningMorning , 170, 29, Light_green);}
-   else {tft.drawBitmap(150, 220, afternoonAfternoon  , 170, 29, Light_green);}
-  
+  if (timeClient.getHours() < 12 && timeClient.getHours() > 0) {
+    tft.drawBitmap(150, 220, MorningMorning, 170, 29, Light_green);
+  } else {
+    tft.drawBitmap(150, 220, afternoonAfternoon, 170, 29, Light_green);
+  }
 
-    // Update digital time
-    int xpos = 85;
-    int ypos = 90; // Top left corner ot clock text, about half way down
-    int ysecs = ypos + 24;
+  int xpos = 85;
+  int ypos = 90;
+  int ysecs = ypos + 24;
 
-    if (omm != mm || flag == 1) { // Redraw hours and minutes time every minute
-      omm = mm;
-      // Draw hours and minutes
-      tft.setTextColor(Time_color, TFT_BLACK); 
-      if (hh < 10) xpos += tft.drawChar('0', xpos, ypos, 7); // Add hours leading zero for 24 hr clock
-      xpos += tft.drawNumber(hh, xpos, ypos, 7);             // Draw hours
-      xcolon = xpos; // Save colon coord for later to flash on/off later
-      xpos += tft.drawChar(':', xpos, ypos - 8, 7);
-      if (mm < 10) xpos += tft.drawChar('0', xpos, ypos, 7); // Add minutes leading zero
-      xpos += tft.drawNumber(mm, xpos, ypos, 7);             // Draw minutes
-      xsecs = xpos; // Sae seconds 'x' position for later display updates
-      flag = 0;
+  if (omm != mm || flag == 1) {
+    omm = mm;
+    tft.setTextColor(Time_color, TFT_BLACK);
+    if (hh < 10) xpos += tft.drawChar('0', xpos, ypos, 7);
+    xpos += tft.drawNumber(hh, xpos, ypos, 7);
+    xcolon = xpos;
+    xpos += tft.drawChar(':', xpos, ypos - 8, 7);
+    if (mm < 10) xpos += tft.drawChar('0', xpos, ypos, 7);
+    xpos += tft.drawNumber(mm, xpos, ypos, 7);
+    xsecs = xpos;
+    flag = 0;
+  }
+
+  if (oss != ss) {
+    oss = ss;
+    xpos = xsecs;
+    if (ss % 2) {
+      tft.setTextColor(0x39C4, TFT_BLACK);
+      tft.drawChar(':', xcolon, ypos - 8, 7);
+      tft.setTextColor(Time_color, TFT_BLACK);
+    } else {
+      tft.setTextColor(Time_color, TFT_BLACK);
+      tft.drawChar(':', xcolon, ypos - 8, 7);
     }
-    if (oss != ss) { // Redraw seconds time every second
-      oss = ss;
-      xpos = xsecs;
+  }
 
-      if (ss % 2) { // Flash the colons on/off
-        tft.setTextColor(0x39C4, TFT_BLACK);        // Set colour to grey to dim colon
-        tft.drawChar(':', xcolon, ypos - 8, 7);     // Hour:minute colon
-        tft.setTextColor(Time_color, TFT_BLACK);    // Set colour back to yellow
-      }
-      else {
-        tft.setTextColor(Time_color, TFT_BLACK);
-        tft.drawChar(':', xcolon, ypos - 8, 7);     // Hour:minute colon
-      }
-
-    }
-  // }
- tft.setTextSize(1); 
- prev_hour = timeClient.getHours();
+  tft.setTextSize(1);
+  prev_hour = timeClient.getHours();
 }
 
-// Function to extract numbers from compile time string
+// ============================================================
+//  UTILITY FUNCTIONS
+// ============================================================
+
 static uint8_t conv2d(const char* p) {
   uint8_t v = 0;
   if ('0' <= *p && *p <= '9')
@@ -422,18 +843,23 @@ void printDetail(uint8_t type, int value) {
   switch (type) {
     case TimeOut:
       Serial.println(F("Time Out!"));
+      tftToast("DFPLAYER: TIMEOUT", 2);
       break;
     case WrongStack:
       Serial.println(F("Stack Wrong!"));
       break;
     case DFPlayerCardInserted:
       Serial.println(F("Card Inserted!"));
+      dfPlayerOK = true; // Card re-inserted
       break;
     case DFPlayerCardRemoved:
       Serial.println(F("Card Removed!"));
+      dfPlayerOK = false;
+      tftToast("SD CARD REMOVED!", 3);
       break;
     case DFPlayerCardOnline:
       Serial.println(F("Card Online!"));
+      dfPlayerOK = true;
       break;
     case DFPlayerUSBInserted:
       Serial.println("USB Inserted!");
@@ -451,6 +877,7 @@ void printDetail(uint8_t type, int value) {
       switch (value) {
         case Busy:
           Serial.println(F("Card not found"));
+          tftToast("DFPLAYER: CARD NOT FOUND", 3);
           break;
         case Sleeping:
           Serial.println(F("Sleeping"));
@@ -463,9 +890,11 @@ void printDetail(uint8_t type, int value) {
           break;
         case FileIndexOut:
           Serial.println(F("File Index Out of Bound"));
+          tftToast("DFPLAYER: FILE NOT FOUND", 3);
           break;
         case FileMismatch:
           Serial.println(F("Cannot Find File"));
+          tftToast("DFPLAYER: FILE MISMATCH", 3);
           break;
         case Advertise:
           Serial.println(F("In Advertise"));
@@ -481,10 +910,7 @@ void printDetail(uint8_t type, int value) {
 
 void waitMilliseconds(uint16_t msWait) {
   uint32_t start = millis();
-
   while ((millis() - start) < msWait) {
-    // calling mp3.loop() periodically allows for notifications
-    // to be handled without interrupts
     delay(1);
   }
 }
